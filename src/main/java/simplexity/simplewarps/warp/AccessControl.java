@@ -102,4 +102,9 @@ public class AccessControl {
     public boolean canAccess(Player player) {
         return accessType.canAccess(player, this);
     }
+
+    //todo replace with actual permission check
+    public boolean isOwnerOrAdmin(Player player) {
+        return player.getUniqueId().equals(owner) || player.isOp();
+    }
 }

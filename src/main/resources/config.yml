@@ -1,0 +1,7 @@
+#This is an empty file.
+mysql:
+  enabled: false
+  ip: "localhost:3306"
+  name: "simplewarps"
+  username: "username1"
+  password: "badpassword!"

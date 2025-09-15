@@ -1,4 +1,4 @@
-name: Simple Warps
+name: SimpleWarps
 version: '0.0.0'
-main: simplexity.simplewarps.SimpleWarps.java
+main: simplexity.simplewarps.SimpleWarps
 api-version: '1.21.8'

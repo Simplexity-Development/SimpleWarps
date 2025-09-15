@@ -5,6 +5,7 @@ import org.bukkit.permissions.Permission;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Collections;
 import java.util.Set;
 import java.util.UUID;
 
@@ -32,6 +33,15 @@ public class Warp {
         this.description = description;
         this.accessControl = new AccessControl(owner, allowList, blockList, allowedPermissions,
                 blockedPermissions, accessType);
+    }
+
+    public Warp(@NotNull String name, @NotNull Location location, @NotNull UUID owner){
+        this.warpId = UUID.randomUUID();
+        this.name = name;
+        this.location = location;
+        this.description = null;
+        this.accessControl = new AccessControl(owner, Collections.emptyList(), Collections.emptyList(),
+                Collections.emptyList(), Collections.emptyList(), WarpAccessType.PUBLIC);
     }
 
 
