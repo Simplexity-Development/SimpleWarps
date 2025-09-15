@@ -3,6 +3,7 @@ package simplexity.simplewarps;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.plugin.java.JavaPlugin;
+import simplexity.simplewarps.commands.SetWarpCommand;
 import simplexity.simplewarps.commands.WarpCommand;
 import simplexity.simplewarps.config.ConfigHandler;
 import simplexity.simplewarps.saving.Cache;
@@ -25,10 +26,10 @@ public final class SimpleWarps extends JavaPlugin {
         } catch (SQLException e) {
             getLogger().info("Exception: " + e.getMessage());
         }
-        this.getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, commands ->
-                commands.registrar().register(WarpCommand.createCommand().build()));
+
         registerCommands();
         registerListeners();
+        Cache.loadAllWarps();
     }
 
     public static SimpleWarps getInstance() {
@@ -40,6 +41,10 @@ public final class SimpleWarps extends JavaPlugin {
     }
 
     private void registerCommands() {
+        this.getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, commands -> {
+                commands.registrar().register(WarpCommand.createCommand().build());
+                commands.registrar().register(SetWarpCommand.createCommand().build());
+        });
     }
 
     private void registerListeners() {
@@ -53,8 +58,8 @@ public final class SimpleWarps extends JavaPlugin {
     }
 
     @Override
-    public void onDisable(){
-        Cache.clear();
+    public void onDisable() {
+        Cache.clearCache();
         SqlHandler.getInstance().closeDatabase();
     }
 }

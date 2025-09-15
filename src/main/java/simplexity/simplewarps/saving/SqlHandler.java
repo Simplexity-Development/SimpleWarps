@@ -8,6 +8,7 @@ import org.bukkit.permissions.Permission;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import simplexity.simplewarps.SimpleWarps;
+import simplexity.simplewarps.config.ConfigHandler;
 import simplexity.simplewarps.warp.AccessControl;
 import simplexity.simplewarps.warp.Warp;
 import simplexity.simplewarps.warp.WarpAccessType;
@@ -17,11 +18,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 public class SqlHandler {
 
@@ -43,16 +40,14 @@ public class SqlHandler {
      * Initializes all required tables if they do not exist.
      */
     public void initialize() throws SQLException {
-
         setupConfig();
         try (Statement statement = getConnection().createStatement()) {
-            // warps table
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS warps (
                         warp_id CHAR(36) PRIMARY KEY,
                         owner_id CHAR(36),
                         name VARCHAR(64) NOT NULL,
-                        world VARCHAR(64) NOT NULL,
+                        world_id VARCHAR(36) NOT NULL,
                         x DOUBLE NOT NULL,
                         y DOUBLE NOT NULL,
                         z DOUBLE NOT NULL,
@@ -63,7 +58,6 @@ public class SqlHandler {
                     )
                     """);
 
-            // allow/block UUIDs
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS warp_allow_list (
                         warp_id CHAR(36),
@@ -82,7 +76,6 @@ public class SqlHandler {
                     )
                     """);
 
-            // allowed/blocked permissions
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS warp_allowed_permissions (
                         warp_id CHAR(36),
@@ -108,29 +101,45 @@ public class SqlHandler {
     // ----------------- CRUD -----------------
 
     public void saveWarp(Warp warp) {
-        String sql = """
-                INSERT INTO warps (warp_id, owner_id, name, world, x, y, z, yaw, pitch, description, access_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                    owner_id=VALUES(owner_id),
-                    name=VALUES(name),
-                    world=VALUES(world),
-                    x=VALUES(x),
-                    y=VALUES(y),
-                    z=VALUES(z),
-                    yaw=VALUES(yaw),
-                    pitch=VALUES(pitch),
-                    description=VALUES(description),
-                    access_type=VALUES(access_type)
-                """;
-        try (PreparedStatement statement = getConnection().prepareStatement(sql)) {
+        String saveQuery;
+        if (ConfigHandler.getInstance().isMySqlEnabled()) {
+            saveQuery = """
+                    INSERT INTO warps (warp_id, owner_id, name, world_id, x, y, z, yaw, pitch, description, access_type)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        owner_id=VALUES(owner_id),
+                        name=VALUES(name),
+                        world_id=VALUES(world),
+                        x=VALUES(x),
+                        y=VALUES(y),
+                        z=VALUES(z),
+                        yaw=VALUES(yaw),
+                        pitch=VALUES(pitch),
+                        description=VALUES(description),
+                        access_type=VALUES(access_type)
+                    """;
+        } else {
+            saveQuery = """
+                        INSERT INTO warps (name, world_id, x, y, z, yaw, pitch, owner)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(name) DO UPDATE SET
+                          world_id=excluded.world_id,
+                          x=excluded.x,
+                          y=excluded.y,
+                          z=excluded.z,
+                          yaw=excluded.yaw,
+                          pitch=excluded.pitch,
+                          owner=excluded.owner
+                    """;
+        }
+
+        try (PreparedStatement statement = getConnection().prepareStatement(saveQuery)) {
             bindWarp(statement, warp);
             statement.executeUpdate();
         } catch (SQLException e) {
             logger.warn("Failed to save warp '{}' with id: {}, reason: {}", warp.getName(), warp.getWarpId(), e.getMessage(), e);
         }
 
-        // clear and re-insert access control lists
         clearAccessControl(warp.getWarpId());
         insertAccessControl(warp);
 
@@ -151,6 +160,7 @@ public class SqlHandler {
         }
         return null;
     }
+
 
     public List<Warp> getWarpsByOwner(UUID owner) {
         List<Warp> result = new ArrayList<>();
@@ -203,7 +213,7 @@ public class SqlHandler {
             statement.setString(1, warp.getWarpId().toString());
             statement.setString(2, warp.getAccessControl().getOwner() != null ? warp.getAccessControl().getOwner().toString() : null);
             statement.setString(3, warp.getName());
-            statement.setString(4, location.getWorld().getName());
+            statement.setString(4, location.getWorld().getUID().toString());
             statement.setDouble(5, location.getX());
             statement.setDouble(6, location.getY());
             statement.setDouble(7, location.getZ());
@@ -274,7 +284,7 @@ public class SqlHandler {
             UUID warpId = UUID.fromString(resultSet.getString("warp_id"));
             UUID ownerId = resultSet.getString("owner_id") != null ? UUID.fromString(resultSet.getString("owner_id")) : null;
             String name = resultSet.getString("name");
-            String world = resultSet.getString("world");
+            UUID world = UUID.fromString(resultSet.getString("world_id"));
             Location loc = new Location(Bukkit.getWorld(world),
                     resultSet.getDouble("x"),
                     resultSet.getDouble("y"),
@@ -292,6 +302,53 @@ public class SqlHandler {
 
     }
 
+    public List<Warp> getAllWarps() {
+        List<Warp> warps = new ArrayList<>();
+        String warpQuery = "SELECT * FROM warps";
+
+        try (Connection connection = getConnection();
+             PreparedStatement statement = connection.prepareStatement(warpQuery);
+             ResultSet resultSet = statement.executeQuery()) {
+            Map<UUID, Set<UUID>> allowMap = loadWarpUuidMap(connection, "warp_allow_list");
+            Map<UUID, Set<UUID>> blockMap = loadWarpUuidMap(connection, "warp_block_list");
+            Map<UUID, Set<Permission>> allowedPermsMap = loadWarpPermissionMap(connection, "warp_allowed_permissions");
+            Map<UUID, Set<Permission>> blockedPermsMap = loadWarpPermissionMap(connection, "warp_blocked_permissions");
+            while (resultSet.next()) {
+                String warpName = resultSet.getString("name");
+                UUID worldId = UUID.fromString(resultSet.getString("world_id"));
+                UUID warpId = UUID.fromString(resultSet.getString("warp_id"));
+                double x = resultSet.getDouble("x");
+                double y = resultSet.getDouble("y");
+                double z = resultSet.getDouble("z");
+                float yaw = resultSet.getFloat("yaw");
+                float pitch = resultSet.getFloat("pitch");
+
+                UUID owner = resultSet.getString("owner") != null ? UUID.fromString(resultSet.getString("owner")) : null;
+                WarpAccessType accessType = WarpAccessType.valueOf(resultSet.getString("type").toUpperCase());
+
+                Location location = new Location(Bukkit.getWorld(worldId), x, y, z, yaw, pitch);
+                String warpDescription = resultSet.getString("description");
+
+                AccessControl accessControl = new AccessControl(
+                        owner,
+                        allowMap.getOrDefault(warpId, Set.of()),
+                        blockMap.getOrDefault(warpId, Set.of()),
+                        allowedPermsMap.getOrDefault(warpId, Set.of()),
+                        blockedPermsMap.getOrDefault(warpId, Set.of()),
+                        accessType
+                );
+
+                Warp warp = new Warp(warpId, warpName, location, warpDescription, accessControl);
+                warps.add(warp);
+            }
+
+        } catch (SQLException e) {
+            logger.error("Failed to fetch warps from database, Error: {}", e.getMessage(), e);
+        }
+        return warps;
+    }
+
+
     private AccessControl loadAccessControl(UUID warpId, UUID owner, WarpAccessType type) {
         Set<UUID> allow = new HashSet<>();
         Set<UUID> block = new HashSet<>();
@@ -304,6 +361,35 @@ public class SqlHandler {
         loadPermissionSet("warp_blocked_permissions", warpId, blockedPerms);
 
         return new AccessControl(owner, allow, block, allowedPerms, blockedPerms, type);
+    }
+
+
+    private Map<UUID, Set<UUID>> loadWarpUuidMap(Connection connection, String table) throws SQLException {
+        Map<UUID, Set<UUID>> map = new HashMap<>();
+        String query = "SELECT warp_id, player_id FROM " + table;
+        try (PreparedStatement stmt = connection.prepareStatement(query);
+             ResultSet rs = stmt.executeQuery()) {
+            while (rs.next()) {
+                UUID warpId = UUID.fromString(rs.getString("warp_id"));
+                UUID playerId = UUID.fromString(rs.getString("player_id"));
+                map.computeIfAbsent(warpId, k -> new HashSet<>()).add(playerId);
+            }
+        }
+        return map;
+    }
+
+    private Map<UUID, Set<Permission>> loadWarpPermissionMap(Connection connection, String table) throws SQLException {
+        Map<UUID, Set<Permission>> map = new HashMap<>();
+        String query = "SELECT warp_id, permission FROM " + table;
+        try (PreparedStatement stmt = connection.prepareStatement(query);
+             ResultSet rs = stmt.executeQuery()) {
+            while (rs.next()) {
+                UUID warpId = UUID.fromString(rs.getString("warp_id"));
+                Permission permission = new Permission(rs.getString("permission"));
+                map.computeIfAbsent(warpId, k -> new HashSet<>()).add(permission);
+            }
+        }
+        return map;
     }
 
     private void loadUuidSet(String table, UUID warpId, Set<UUID> target) {
@@ -343,6 +429,14 @@ public class SqlHandler {
     }
 
     private void setupConfig() {
+        if (ConfigHandler.getInstance().isMySqlEnabled()) {
+            hikariConfig.setJdbcUrl("jdbc:mysql://" + ConfigHandler.getInstance().getMySqlIp() + "/" + ConfigHandler.getInstance().getMySqlName());
+            hikariConfig.setUsername(ConfigHandler.getInstance().getMySqlUsername());
+            hikariConfig.setPassword(ConfigHandler.getInstance().getMySqlPassword());
+            hikariConfig.setMaximumPoolSize(10);
+            dataSource = new HikariDataSource(hikariConfig);
+            debug("Initialized MySQL connection to '{}'", hikariConfig.getJdbcUrl());
+        }
         hikariConfig.setJdbcUrl("jdbc:sqlite:" + SimpleWarps.getInstance().getDataFolder() + "/simplewarps.db?foreign_keys=on");
         hikariConfig.setMaximumPoolSize(10);
         hikariConfig.setConnectionTestQuery("PRAGMA journal_mode = WAL;");

@@ -2,12 +2,7 @@ package simplexity.simplewarps.saving;
 
 import simplexity.simplewarps.warp.Warp;
 
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Cache {
@@ -15,6 +10,12 @@ public class Cache {
     private static final Map<UUID, Set<Warp>> byOwner = new ConcurrentHashMap<>();
     private static final Map<String, Warp> byName = new ConcurrentHashMap<>();
 
+    public static void loadAllWarps(){
+        List<Warp> warpList = SqlHandler.getInstance().getAllWarps();
+        for (Warp warp : warpList) {
+            addWarp(warp);
+        }
+    }
     public static void addWarp(Warp warp) {
         byId.put(warp.getWarpId(), warp);
         if (warp.getAccessControl().getOwner() != null) {
@@ -50,7 +51,7 @@ public class Cache {
         return Collections.unmodifiableCollection(byId.values());
     }
 
-    public static void clear() {
+    public static void clearCache() {
         byId.clear();
         byOwner.clear();
         byName.clear();
